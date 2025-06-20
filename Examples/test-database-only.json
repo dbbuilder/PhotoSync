@@ -1,0 +1,5 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=test-db.company.com,1433;Database=TestPhotoDB;User Id=test_user;Password=TestPass123!;Encrypt=true;TrustServerCertificate=true;MultipleActiveResultSets=true;"
+  }
+}

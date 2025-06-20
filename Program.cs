@@ -18,7 +18,7 @@ namespace PhotoSync
         /// Main application entry point
         /// Processes command line arguments and routes to appropriate command handlers
         /// </summary>
-        /// <param name="args">Command line arguments: [command] [optional path]</param>
+        /// <param name="args">Command line arguments: [command] [optional path] [-settings path]</param>
         /// <returns>Exit code: 0 for success, 1 for error</returns>
         static async Task<int> Main(string[] args)
         {
@@ -34,8 +34,16 @@ namespace PhotoSync
                 Log.Information("PhotoSync application starting...");
                 Log.Information("Command line arguments: {Args}", string.Join(" ", args));
 
-                // Build configuration from appsettings.json files
-                var configuration = BuildConfiguration();
+                // Parse command line arguments
+                var parsedArgs = ParseCommandLineArguments(args);
+                if (!parsedArgs.IsValid)
+                {
+                    ShowUsage();
+                    return 1;
+                }
+
+                // Build configuration from appsettings.json files and optional settings override
+                var configuration = BuildConfiguration(parsedArgs.SettingsOverridePath);
                 
                 // Print connection string in development mode for debugging
                 PrintDebugInfo(configuration);
@@ -43,20 +51,11 @@ namespace PhotoSync
                 // Configure dependency injection container
                 var serviceProvider = ConfigureServices(configuration);
                 
-                // Validate command line arguments
-                if (args.Length == 0)
-                {
-                    ShowUsage();
-                    return 1;
-                }
-
-                var command = args[0].ToLowerInvariant();
-                var folderPath = args.Length > 1 ? args[1] : null;
-
-                Log.Information("Executing command: {Command} with folder: {Folder}", command, folderPath ?? "[default from config]");
+                Log.Information("Executing command: {Command} with folder: {Folder}", 
+                    parsedArgs.Command, parsedArgs.FolderPath ?? "[default from config]");
 
                 // Route to appropriate command handler
-                var exitCode = await ExecuteCommandAsync(serviceProvider, command, folderPath);
+                var exitCode = await ExecuteCommandAsync(serviceProvider, parsedArgs.Command, parsedArgs.FolderPath);
                 
                 Log.Information("PhotoSync application completed with exit code: {ExitCode}", exitCode);
                 return exitCode;
@@ -74,11 +73,86 @@ namespace PhotoSync
         }
 
         /// <summary>
+        /// Parses command line arguments into a structured format
+        /// Supports: [command] [optional folder path] [-settings override-file-path]
+        /// </summary>
+        /// <param name="args">Raw command line arguments</param>
+        /// <returns>Parsed argument structure</returns>
+        private static ParsedArguments ParseCommandLineArguments(string[] args)
+        {
+            var result = new ParsedArguments();
+            
+            if (args.Length == 0)
+            {
+                result.IsValid = false;
+                return result;
+            }
+
+            // First argument is always the command
+            result.Command = args[0].ToLowerInvariant();
+            
+            // Process remaining arguments
+            for (int i = 1; i < args.Length; i++)
+            {
+                var arg = args[i];
+                
+                if (arg.ToLowerInvariant() == "-settings" || arg.ToLowerInvariant() == "--settings")
+                {
+                    // Next argument should be the settings file path
+                    if (i + 1 < args.Length)
+                    {
+                        i++; // Move to next argument
+                        result.SettingsOverridePath = args[i];
+                        Log.Information("Settings override file specified: {SettingsPath}", result.SettingsOverridePath);
+                    }
+                    else
+                    {
+                        Log.Error("Settings argument specified but no file path provided");
+                        result.IsValid = false;
+                        return result;
+                    }
+                }
+                else if (!arg.StartsWith("-") && string.IsNullOrEmpty(result.FolderPath))
+                {
+                    // Non-flag argument is treated as folder path (if not already set)
+                    result.FolderPath = arg;
+                }
+                else if (arg.StartsWith("-"))
+                {
+                    Log.Warning("Unknown argument: {Argument}", arg);
+                    // Continue processing - don't fail on unknown arguments
+                }
+            }
+
+            result.IsValid = !string.IsNullOrEmpty(result.Command);
+            
+            Log.Information("Parsed arguments - Command: {Command}, Folder: {Folder}, Settings: {Settings}", 
+                result.Command, 
+                result.FolderPath ?? "[none]", 
+                result.SettingsOverridePath ?? "[none]");
+                
+            return result;
+        }
+
+        /// <summary>
+        /// Structure to hold parsed command line arguments
+        /// </summary>
+        private class ParsedArguments
+        {
+            public bool IsValid { get; set; } = true;
+            public string Command { get; set; } = string.Empty;
+            public string? FolderPath { get; set; }
+            public string? SettingsOverridePath { get; set; }
+        }
+
+        /// <summary>
         /// Builds application configuration from appsettings.json files and environment variables
         /// Supports Development, Production environment-specific configurations
+        /// Optionally applies settings overrides from a specified file
         /// </summary>
+        /// <param name="settingsOverridePath">Optional path to settings override file</param>
         /// <returns>Built configuration instance</returns>
-        private static IConfiguration BuildConfiguration()
+        private static IConfiguration BuildConfiguration(string? settingsOverridePath = null)
         {
             var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Development";
             
@@ -87,6 +161,21 @@ namespace PhotoSync
                 .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
                 .AddJsonFile($"appsettings.{environment}.json", optional: true, reloadOnChange: true)
                 .AddEnvironmentVariables("PHOTOSYNC_"); // Allow environment variable overrides with PHOTOSYNC_ prefix
+
+            // Add settings override file if specified
+            if (!string.IsNullOrEmpty(settingsOverridePath))
+            {
+                if (File.Exists(settingsOverridePath))
+                {
+                    Log.Information("Applying settings override from: {SettingsPath}", settingsOverridePath);
+                    configBuilder.AddJsonFile(settingsOverridePath, optional: false, reloadOnChange: false);
+                }
+                else
+                {
+                    Log.Error("Settings override file not found: {SettingsPath}", settingsOverridePath);
+                    throw new FileNotFoundException($"Settings override file not found: {settingsOverridePath}");
+                }
+            }
 
             // Add Azure Key Vault in Production environment (requires proper Azure configuration)
             if (environment == "Production")
@@ -420,7 +509,7 @@ namespace PhotoSync
             Console.WriteLine("===============================================");
             Console.WriteLine();
             Console.WriteLine("USAGE:");
-            Console.WriteLine("  PhotoSync <command> [folder-path]");
+            Console.WriteLine("  PhotoSync <command> [folder-path] [-settings override-file]");
             Console.WriteLine();
             Console.WriteLine("COMMANDS:");
             Console.WriteLine("  import [path]   Import JPG files from folder to database");
@@ -435,6 +524,10 @@ namespace PhotoSync
             Console.WriteLine();
             Console.WriteLine("  diagnose        Run detailed database connection diagnostic");
             Console.WriteLine();
+            Console.WriteLine("OPTIONS:");
+            Console.WriteLine("  -settings <file>  Override connection and photo settings from file");
+            Console.WriteLine("                    File should contain ConnectionStrings and/or PhotoSettings");
+            Console.WriteLine();
             Console.WriteLine("EXAMPLES:");
             Console.WriteLine("  PhotoSync import");
             Console.WriteLine("  PhotoSync import \"C:\\MyPhotos\"");
@@ -442,6 +535,8 @@ namespace PhotoSync
             Console.WriteLine("  PhotoSync status");
             Console.WriteLine("  PhotoSync test");
             Console.WriteLine("  PhotoSync diagnose");
+            Console.WriteLine("  PhotoSync import -settings \"C:\\Config\\prod-settings.json\"");
+            Console.WriteLine("  PhotoSync status -settings \"C:\\Config\\test-db.json\"");
             Console.WriteLine();
             Console.WriteLine("For more information, see README.md");
 

@@ -1,0 +1,10 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=(localdb)\\mssqllocaldb;Database=PhotoSyncDev;Trusted_Connection=true;MultipleActiveResultSets=true;"
+  },
+  "PhotoSettings": {
+    "TableName": "DevPhotos",
+    "ImportFolder": "C:\\Dev\\TestPhotos\\Import",
+    "ExportFolder": "C:\\Dev\\TestPhotos\\Export"
+  }
+}

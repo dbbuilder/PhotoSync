@@ -1,0 +1,12 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=prod-server.company.com,1433;Database=ProductionPhotoDB;User Id=photosync_prod;Password=SecurePassword123!;Encrypt=true;TrustServerCertificate=true;MultipleActiveResultSets=true;"
+  },
+  "PhotoSettings": {
+    "TableName": "ProductionPhotos",
+    "ImageFieldName": "ImageData",
+    "CodeFieldName": "PhotoCode",
+    "ImportFolder": "\\\\prod-share\\photos\\import",
+    "ExportFolder": "\\\\prod-share\\photos\\export"
+  }
+}

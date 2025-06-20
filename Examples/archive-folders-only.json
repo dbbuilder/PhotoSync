@@ -1,0 +1,7 @@
+{
+  "PhotoSettings": {
+    "TableName": "ArchivePhotos",
+    "ImportFolder": "D:\\Archive\\Import",
+    "ExportFolder": "D:\\Archive\\Export"
+  }
+}
