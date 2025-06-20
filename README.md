@@ -28,8 +28,25 @@ A .NET Core console application for importing JPG images from folders into a SQL
    dotnet restore
    ```
 
-2. **Configure database**:
-   - Update connection string in `appsettings.Development.json`
+2. **Setup configuration**:
+   ```powershell
+   # Use the automated setup script
+   .\Scripts\setup-config.ps1
+   
+   # OR manually copy template files
+   copy appsettings.json.template appsettings.json
+   copy appsettings.Development.json.template appsettings.Development.json
+   ```
+   
+   ⚠️ **Important**: Update the configuration files with your actual values:
+   - Database connection strings
+   - Azure Key Vault URL (if using Azure)
+   - Application Insights key (if using Azure)
+   
+   📋 **For detailed configuration instructions, see [CONFIG_SETUP.md](CONFIG_SETUP.md)**
+
+3. **Configure database**:
+   - Verify connection string in your appsettings files
    - Run `Database/StoredProcedures.sql` in your SQL Server
 
 3. **Configure folders**:
@@ -78,22 +95,41 @@ PhotoSync.exe test
 
 ### Configuration
 
-Update `appsettings.json`:
+The application uses appsettings.json files for configuration. For security, actual configuration files are excluded from Git.
 
+**Setup Process:**
+1. Copy template files: `.\Scripts\setup-config.ps1` (or manually copy .template files)
+2. Update configuration values with your environment-specific settings
+3. For detailed instructions, see [CONFIG_SETUP.md](CONFIG_SETUP.md)
+
+**Template Structure:**
 ```json
 {
   "ConnectionStrings": {
-    "DefaultConnection": "your-connection-string-here"
+    "DefaultConnection": "YOUR_CONNECTION_STRING_HERE"
   },
   "PhotoSettings": {
-    "TableName": "YourTableName",
-    "ImageFieldName": "YourImageFieldName", 
-    "CodeFieldName": "YourCodeFieldName",
-    "ImportFolder": "/path/to/import",
-    "ExportFolder": "/path/to/export"
+    "TableName": "Photos",
+    "ImageFieldName": "ImageData", 
+    "CodeFieldName": "Code",
+    "ImportFolder": "C:\\Temp\\PhotoSync\\Import",
+    "ExportFolder": "C:\\Temp\\PhotoSync\\Export"
+  },
+  "Azure": {
+    "KeyVault": {
+      "VaultUrl": "https://YOUR_KEYVAULT_NAME.vault.azure.net/"
+    },
+    "ApplicationInsights": {
+      "InstrumentationKey": "YOUR_INSTRUMENTATION_KEY"
+    }
   }
 }
 ```
+
+**Template Files Available:**
+- `appsettings.json.template` - Base configuration
+- `appsettings.Development.json.template` - Development overrides 
+- `appsettings.Production.json.template` - Production overrides
 
 ### Environment Variables
 

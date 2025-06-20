@@ -1,0 +1,26 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=YOUR_PROD_SERVER;Database=YOUR_PROD_DATABASE;User Id=YOUR_USERNAME;Password=YOUR_PASSWORD;Encrypt=true;TrustServerCertificate=true;MultipleActiveResultSets=true;"
+  },
+  "PhotoSettings": {
+    "ImportFolder": "/app/import",
+    "ExportFolder": "/app/export"
+  },
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft": "Warning",
+        "System": "Warning"
+      }
+    }
+  },
+  "Azure": {
+    "KeyVault": {
+      "VaultUrl": "https://YOUR_KEYVAULT_NAME.vault.azure.net/"
+    },
+    "ApplicationInsights": {
+      "InstrumentationKey": "YOUR_INSTRUMENTATION_KEY"
+    }
+  }
+}

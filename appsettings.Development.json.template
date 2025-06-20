@@ -1,0 +1,18 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=YOUR_DEV_SERVER;Database=YOUR_DEV_DATABASE;User Id=YOUR_USERNAME;Password=YOUR_PASSWORD;Encrypt=true;TrustServerCertificate=true;MultipleActiveResultSets=true;",
+    "TestConnection": "Server=YOUR_TEST_SERVER;Database=master;User Id=YOUR_TEST_USERNAME;Password=YOUR_TEST_PASSWORD;Encrypt=true;TrustServerCertificate=true;MultipleActiveResultSets=true;"
+  },
+  "PhotoSettings": {
+    "TableName": "Photos",
+    "ImageFieldName": "ImageData",
+    "CodeFieldName": "Code",
+    "ImportFolder": "C:\\Temp\\PhotoSync\\Import",
+    "ExportFolder": "C:\\Temp\\PhotoSync\\Export"
+  },
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Debug"
+    }
+  }
+}

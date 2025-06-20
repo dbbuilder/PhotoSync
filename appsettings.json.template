@@ -1,0 +1,43 @@
+{
+  "ConnectionStrings": {
+    "DefaultConnection": "Server=YOUR_SERVER;Database=YOUR_DATABASE;User Id=YOUR_USERNAME;Password=YOUR_PASSWORD;Encrypt=true;TrustServerCertificate=true;"
+  }, 
+  "PhotoSettings": {
+    "TableName": "Photos",
+    "ImageFieldName": "ImageData",
+    "CodeFieldName": "Code",
+    "ImportFolder": "C:\\Temp\\PhotoSync\\Import",
+    "ExportFolder": "C:\\Temp\\PhotoSync\\Export"
+  }, 
+  "Serilog": {
+    "MinimumLevel": {
+      "Default": "Information",
+      "Override": {
+        "Microsoft": "Warning",
+        "System": "Warning"
+      }
+    },
+    "WriteTo": [
+      {
+        "Name": "Console"
+      },
+      {
+        "Name": "File",
+        "Args": {
+          "path": "logs/app-.txt",
+          "rollingInterval": "Day",
+          "retainedFileCountLimit": 7
+        }
+      }
+    ],
+    "Enrich": [ "FromLogContext", "WithMachineName", "WithThreadId" ]
+  },
+  "Azure": {
+    "KeyVault": {
+      "VaultUrl": "https://YOUR_KEYVAULT_NAME.vault.azure.net/"
+    },
+    "ApplicationInsights": {
+      "InstrumentationKey": "YOUR_INSTRUMENTATION_KEY"
+    }
+  }
+}
