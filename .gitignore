@@ -342,9 +342,6 @@ MigrationBackup/
 logs/
 *.log
 appsettings.*.json
-!appsettings.json
-!appsettings.Development.json
-!appsettings.Production.json
 
 # Test data
 test-images/
