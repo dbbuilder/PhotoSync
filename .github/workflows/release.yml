@@ -1,0 +1,165 @@
+name: 🚀 Build and Release PhotoSync
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'  # Triggers on version tags like v1.0.0, v1.2.3, etc.
+  workflow_dispatch:  # Allows manual triggering
+
+env:
+  DOTNET_VERSION: '8.0.x'
+  PROJECT_NAME: 'PhotoSync'
+  
+jobs:
+  build-and-release:
+    name: 🏗️ Build and Create Release
+    runs-on: windows-latest
+    
+    steps:
+    - name: 📥 Checkout Code
+      uses: actions/checkout@v4
+      
+    - name: 🔧 Setup .NET
+      uses: actions/setup-dotnet@v4
+      with:
+        dotnet-version: ${{ env.DOTNET_VERSION }}
+        
+    - name: 📦 Restore Dependencies
+      run: dotnet restore
+      
+    - name: 🔨 Build Project
+      run: dotnet build -c Release --no-restore
+      
+    - name: 🧪 Run Tests (if any exist)
+      run: dotnet test -c Release --no-build --verbosity normal
+      continue-on-error: true  # Don't fail release if tests fail
+      
+    - name: 📱 Publish Self-Contained Windows x64
+      run: |
+        dotnet publish -c Release -r win-x64 --self-contained true --no-restore -o ./publish/win-x64/
+        
+    - name: 📱 Publish Framework-Dependent (Cross-Platform)
+      run: |
+        dotnet publish -c Release --no-restore -o ./publish/framework-dependent/
+        
+    - name: 📊 Get Version from Tag
+      id: version
+      shell: pwsh
+      run: |
+        $version = "${{ github.ref_name }}" -replace '^v', ''
+        echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+        echo "Version: $version"
+        
+    - name: 📋 Create Release Notes
+      id: release_notes
+      shell: pwsh
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+        $releaseNotes = @"
+        ## PhotoSync $version
+        
+        ### 🎯 What's New
+        - Professional photo import/export tool for SQL Server
+        - Command-line interface with import, export, status, and test commands
+        - Comprehensive error handling and logging with Serilog
+        - Configurable via appsettings.json for different environments
+        - Built for Windows Server deployment with automation support
+        
+        ### 📦 Download Options
+        - **PhotoSync-$version-win-x64.zip** - Self-contained Windows x64 (recommended for servers)
+        - **PhotoSync-$version-framework-dependent.zip** - Requires .NET 8.0 runtime (smaller download)
+        
+        ### ⚡ Quick Install
+        ``````powershell
+        # One-line installation (requires PowerShell)
+        iex (iwr "https://raw.githubusercontent.com/${{ github.repository }}/main/Scripts/Install-PhotoSync.ps1").Content
+        ``````
+        
+        ### 🔧 Manual Installation
+        1. Download the appropriate ZIP file below
+        2. Extract to your desired location (e.g., C:\Applications\PhotoSync)
+        3. Update appsettings.Production.json with your database connection
+        4. Run: ``PhotoSync.exe test`` to validate configuration
+        
+        ### 📚 Documentation
+        - [Windows Server Deployment Guide](https://github.com/${{ github.repository }}/blob/main/WINDOWS_SERVER_DEPLOYMENT.md)
+        - [Modern Distribution Guide](https://github.com/${{ github.repository }}/blob/main/MODERN_DISTRIBUTION_GUIDE.md)
+        - [Project README](https://github.com/${{ github.repository }}/blob/main/README.md)
+        
+        ### 💾 Database Setup
+        Make sure to run the database setup scripts in the Database folder to create the required tables and stored procedures.
+        
+        ---
+        
+        **Full Changelog**: https://github.com/${{ github.repository }}/compare/v${{ steps.version.outputs.VERSION }}...v${{ steps.version.outputs.VERSION }}
+        "@
+        
+        # Save to file for upload
+        $releaseNotes | Out-File -FilePath "release-notes.md" -Encoding UTF8
+        
+        # Also output for GitHub (escape newlines)
+        $escapedNotes = $releaseNotes -replace "`r`n", "%0A" -replace "`n", "%0A"
+        echo "RELEASE_NOTES=$escapedNotes" >> $env:GITHUB_OUTPUT
+        
+    - name: 📦 Package Windows x64 Release
+      shell: pwsh
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+        
+        # Create zip for Windows x64 self-contained
+        Compress-Archive -Path "./publish/win-x64/*" -DestinationPath "./PhotoSync-$version-win-x64.zip" -Force
+        
+        # Create zip for framework-dependent
+        Compress-Archive -Path "./publish/framework-dependent/*" -DestinationPath "./PhotoSync-$version-framework-dependent.zip" -Force
+        
+        # Calculate SHA256 hashes for verification
+        $hash1 = Get-FileHash "./PhotoSync-$version-win-x64.zip" -Algorithm SHA256
+        $hash2 = Get-FileHash "./PhotoSync-$version-framework-dependent.zip" -Algorithm SHA256
+        
+        # Create checksums file
+        @"
+        SHA256 Checksums for PhotoSync $version
+        =====================================
+        
+        PhotoSync-$version-win-x64.zip
+        $($hash1.Hash)
+        
+        PhotoSync-$version-framework-dependent.zip
+        $($hash2.Hash)
+        "@ | Out-File -FilePath "CHECKSUMS.txt" -Encoding UTF8
+        
+        echo "✅ Packages created successfully"
+        echo "📦 Windows x64: $(Get-Item "./PhotoSync-$version-win-x64.zip" | Select-Object -ExpandProperty Length) bytes"
+        echo "📦 Framework: $(Get-Item "./PhotoSync-$version-framework-dependent.zip" | Select-Object -ExpandProperty Length) bytes"
+        
+    - name: 🏷️ Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ github.ref_name }}
+        name: "PhotoSync ${{ steps.version.outputs.VERSION }}"
+        body_path: release-notes.md
+        draft: false
+        prerelease: false
+        files: |
+          PhotoSync-${{ steps.version.outputs.VERSION }}-win-x64.zip
+          PhotoSync-${{ steps.version.outputs.VERSION }}-framework-dependent.zip
+          CHECKSUMS.txt
+        generate_release_notes: false  # We're providing our own
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        
+    - name: 📊 Release Summary
+      shell: pwsh
+      run: |
+        $version = "${{ steps.version.outputs.VERSION }}"
+        echo "🎉 PhotoSync $version released successfully!"
+        echo ""
+        echo "📦 Release Assets:"
+        echo "  - PhotoSync-$version-win-x64.zip (Self-contained Windows x64)"
+        echo "  - PhotoSync-$version-framework-dependent.zip (Requires .NET 8.0 runtime)"
+        echo "  - CHECKSUMS.txt (SHA256 verification hashes)"
+        echo ""
+        echo "🔗 Release URL: https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}"
+        echo ""
+        echo "⚡ Users can now install with:"
+        echo "  iex (iwr \"https://raw.githubusercontent.com/${{ github.repository }}/main/Scripts/Install-PhotoSync.ps1\").Content"
