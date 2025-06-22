@@ -30,8 +30,10 @@ namespace PhotoSync.Commands
         /// Executes the export command to save images from database to folder
         /// </summary>
         /// <param name="exportFolder">Optional override for export folder from configuration</param>
+        /// <param name="incremental">Only export new/changed images</param>
+        /// <param name="force">Force export all images regardless of export status</param>
         /// <returns>Export result with statistics</returns>
-        public async Task<ExportResult> ExecuteAsync(string? exportFolder = null)
+        public async Task<ExportResult> ExecuteAsync(string? exportFolder = null, bool incremental = false, bool force = false)
         {
             var folderPath = exportFolder ?? _photoSettings.ExportFolder;
             var result = new ExportResult { FolderPath = folderPath };
@@ -71,8 +73,12 @@ namespace PhotoSync.Commands
                     return result;
                 }
 
-                // Get all images from database
-                var images = await _databaseService.GetAllImagesAsync();
+                // Get images based on export mode
+                var images = (incremental && !force && _photoSettings.UseIncrementalExport) 
+                    ? await _databaseService.GetPhotosForIncrementalExportAsync()
+                    : await _databaseService.GetAllImagesAsync();
+                
+                result.IsIncremental = incremental && !force && _photoSettings.UseIncrementalExport;
 
                 if (!images.Any())
                 {
@@ -84,6 +90,9 @@ namespace PhotoSync.Commands
                 _logger.Information("Found {ImageCount} images to export", images.Count);
                 result.TotalImagesFound = images.Count;
 
+                // Track export date
+                var exportDate = DateTime.UtcNow;
+                
                 // Process each image
                 foreach (var image in images)
                 {
@@ -91,16 +100,29 @@ namespace PhotoSync.Commands
                     {
                         if (image.ImageData?.Length > 0)
                         {
+                            // Format filename if configured
+                            var fileName = FormatExportFileName(image.Code, exportDate);
+                            
                             // Save image to file
                             var savedPath = await _fileService.SaveImageToFolderAsync(
                                 folderPath, 
-                                image.Code, 
+                                fileName, 
                                 image.ImageData);
 
                             result.SuccessCount++;
                             result.ExportedFiles.Add(savedPath);
+                            
+                            // Update export tracking
+                            await _databaseService.UpdateExportTrackingAsync(image.Code, exportDate);
+                            
                             _logger.Information("Successfully exported image: {Code} to {SavedPath} ({FileSize})", 
                                 image.Code, savedPath, image.ImageSizeFormatted);
+                        }
+                        else if (!string.IsNullOrEmpty(image.AzureStoragePath))
+                        {
+                            result.SkippedCount++;
+                            result.SkippedCodes.Add($"{image.Code} (Azure only)");
+                            _logger.Information("Skipped image {Code} - stored in Azure only", image.Code);
                         }
                         else
                         {
@@ -120,8 +142,9 @@ namespace PhotoSync.Commands
                 result.IsSuccess = result.SuccessCount > 0;
                 result.CompletedAt = DateTime.UtcNow;
 
-                _logger.Information("Export operation completed. Success: {SuccessCount}, Failures: {FailureCount}", 
-                    result.SuccessCount, result.FailureCount);
+                _logger.Information("Export operation completed. Mode: {Mode}, Success: {SuccessCount}, Failed: {FailureCount}, Skipped: {SkippedCount}", 
+                    result.IsIncremental ? "Incremental" : "Full",
+                    result.SuccessCount, result.FailureCount, result.SkippedCount);
             }
             catch (System.Exception ex)
             {
@@ -133,6 +156,22 @@ namespace PhotoSync.Commands
 
             return result;
         }
+
+        /// <summary>
+        /// Formats the export file name based on configuration
+        /// </summary>
+        private string FormatExportFileName(string code, DateTime exportDate)
+        {
+            var format = _photoSettings.ExportFileNameFormat;
+            if (string.IsNullOrEmpty(format))
+                return code;
+
+            return format
+                .Replace("{Code}", code)
+                .Replace("{ExportDate:yyyyMMdd}", exportDate.ToString("yyyyMMdd"))
+                .Replace("{ExportDate:yyyy-MM-dd}", exportDate.ToString("yyyy-MM-dd"))
+                .Replace("{ExportDate:HHmmss}", exportDate.ToString("HHmmss"));
+        }
     }
 
     /// <summary>
@@ -141,18 +180,24 @@ namespace PhotoSync.Commands
     public class ExportResult
     {
         public bool IsSuccess { get; set; }
+        public bool IsIncremental { get; set; }
         public string FolderPath { get; set; } = string.Empty;
         public int TotalImagesFound { get; set; }
         public int SuccessCount { get; set; }
         public int FailureCount { get; set; }
+        public int SkippedCount { get; set; }
         public List<string> ExportedFiles { get; set; } = new();
         public List<string> FailedCodes { get; set; } = new();
+        public List<string> SkippedCodes { get; set; } = new();
         public string? ErrorMessage { get; set; }
         public DateTime StartedAt { get; set; } = DateTime.UtcNow;
         public DateTime? CompletedAt { get; set; }
 
         public TimeSpan Duration => CompletedAt?.Subtract(StartedAt) ?? TimeSpan.Zero;
         
-        public string Summary => $"Exported {SuccessCount}/{TotalImagesFound} images in {Duration:mm\\:ss}";
+        public string Summary => 
+            $"Exported {SuccessCount}/{TotalImagesFound} images in {Duration:mm\\:ss}" +
+            (IsIncremental ? " (incremental)" : " (full)") +
+            (SkippedCount > 0 ? $" ({SkippedCount} skipped)" : "");
     }
 }

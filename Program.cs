@@ -55,7 +55,7 @@ namespace PhotoSync
                     parsedArgs.Command, parsedArgs.FolderPath ?? "[default from config]");
 
                 // Route to appropriate command handler
-                var exitCode = await ExecuteCommandAsync(serviceProvider, parsedArgs.Command, parsedArgs.FolderPath);
+                var exitCode = await ExecuteCommandAsync(serviceProvider, parsedArgs);
                 
                 Log.Information("PhotoSync application completed with exit code: {ExitCode}", exitCode);
                 return exitCode;
@@ -74,7 +74,7 @@ namespace PhotoSync
 
         /// <summary>
         /// Parses command line arguments into a structured format
-        /// Supports: [command] [optional folder path] [-settings override-file-path]
+        /// Supports: [command] [optional folder path] [-settings override-file-path] [additional flags]
         /// </summary>
         /// <param name="args">Raw command line arguments</param>
         /// <returns>Parsed argument structure</returns>
@@ -112,6 +112,41 @@ namespace PhotoSync
                         return result;
                     }
                 }
+                else if (arg.ToLowerInvariant() == "-workflow" || arg.ToLowerInvariant() == "--workflow")
+                {
+                    // Next argument should be the workflow steps
+                    if (i + 1 < args.Length)
+                    {
+                        i++; // Move to next argument
+                        result.AdditionalArgs["workflow"] = args[i];
+                        Log.Information("Workflow specified: {Workflow}", args[i]);
+                    }
+                }
+                else if (arg.ToLowerInvariant() == "-skiparchive" || arg.ToLowerInvariant() == "--skiparchive")
+                {
+                    result.Flags.Add("skiparchive");
+                    Log.Information("Skip archive flag set");
+                }
+                else if (arg.ToLowerInvariant() == "-dryrun" || arg.ToLowerInvariant() == "--dryrun")
+                {
+                    result.Flags.Add("dryrun");
+                    Log.Information("Dry run flag set");
+                }
+                else if (arg.ToLowerInvariant() == "-incremental" || arg.ToLowerInvariant() == "--incremental")
+                {
+                    result.Flags.Add("incremental");
+                    Log.Information("Incremental flag set");
+                }
+                else if (arg.ToLowerInvariant() == "-force" || arg.ToLowerInvariant() == "--force")
+                {
+                    result.Flags.Add("force");
+                    Log.Information("Force flag set");
+                }
+                else if (arg.ToLowerInvariant() == "-detailed" || arg.ToLowerInvariant() == "--detailed")
+                {
+                    result.Flags.Add("detailed");
+                    Log.Information("Detailed flag set");
+                }
                 else if (!arg.StartsWith("-") && string.IsNullOrEmpty(result.FolderPath))
                 {
                     // Non-flag argument is treated as folder path (if not already set)
@@ -126,10 +161,11 @@ namespace PhotoSync
 
             result.IsValid = !string.IsNullOrEmpty(result.Command);
             
-            Log.Information("Parsed arguments - Command: {Command}, Folder: {Folder}, Settings: {Settings}", 
+            Log.Information("Parsed arguments - Command: {Command}, Folder: {Folder}, Settings: {Settings}, Flags: {Flags}", 
                 result.Command, 
                 result.FolderPath ?? "[none]", 
-                result.SettingsOverridePath ?? "[none]");
+                result.SettingsOverridePath ?? "[none]",
+                string.Join(", ", result.Flags));
                 
             return result;
         }
@@ -143,6 +179,8 @@ namespace PhotoSync
             public string Command { get; set; } = string.Empty;
             public string? FolderPath { get; set; }
             public string? SettingsOverridePath { get; set; }
+            public HashSet<string> Flags { get; set; } = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            public Dictionary<string, string> AdditionalArgs { get; set; } = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         }
 
         /// <summary>
@@ -218,6 +256,17 @@ namespace PhotoSync
                 Console.WriteLine($"  CodeFieldName: {configuration["PhotoSettings:CodeFieldName"] ?? "[NOT CONFIGURED]"}");
                 Console.WriteLine($"  ImportFolder: {configuration["PhotoSettings:ImportFolder"] ?? "[NOT CONFIGURED]"}");
                 Console.WriteLine($"  ExportFolder: {configuration["PhotoSettings:ExportFolder"] ?? "[NOT CONFIGURED]"}");
+                Console.WriteLine($"  PhotoFieldName: {configuration["PhotoSettings:PhotoFieldName"] ?? "[NOT CONFIGURED]"}");
+                Console.WriteLine($"  AzureStoragePathFieldName: {configuration["PhotoSettings:AzureStoragePathFieldName"] ?? "[NOT CONFIGURED]"}");
+                Console.WriteLine();
+                
+                // Print Azure Storage settings
+                Console.WriteLine("Azure Storage Settings:");
+                Console.WriteLine($"  ContainerName: {configuration["AzureStorage:ContainerName"] ?? "[NOT CONFIGURED]"}");
+                Console.WriteLine($"  UseDefaultAzureCredential: {configuration["AzureStorage:UseDefaultAzureCredential"] ?? "[NOT CONFIGURED]"}");
+                Console.WriteLine($"  StorageAccountName: {configuration["AzureStorage:StorageAccountName"] ?? "[NOT CONFIGURED]"}");
+                var hasConnString = !string.IsNullOrEmpty(configuration["AzureStorage:ConnectionString"]);
+                Console.WriteLine($"  ConnectionString: {(hasConnString ? "[CONFIGURED]" : "[NOT CONFIGURED]")}");
                 Console.WriteLine();
                 
                 // Print configuration files being used
@@ -263,14 +312,20 @@ namespace PhotoSync
             services.AddSingleton(appSettings);
             services.AddSingleton(appSettings.PhotoSettings);
             services.AddSingleton(appSettings.ConnectionStrings);
+            services.AddSingleton(appSettings.AzureStorage);
 
             // Register application services with their interfaces
             services.AddScoped<IDatabaseService, DatabaseService>();
             services.AddScoped<IFileService, FileService>();
+            services.AddScoped<IAzureStorageService, AzureStorageService>();
             
             // Register command handlers
             services.AddScoped<ImportCommand>();
             services.AddScoped<ExportCommand>();
+            services.AddScoped<ToAzureStorageCommand>();
+            services.AddScoped<FromAzureStorageCommand>();
+            services.AddScoped<WriteAllCommand>();
+            services.AddScoped<SyncStatusCommand>();
 
             // Configure Serilog with settings from configuration
             services.AddSingleton<ILogger>(provider =>
@@ -287,22 +342,25 @@ namespace PhotoSync
 
         /// <summary>
         /// Routes command line arguments to appropriate command handlers
-        /// Supports: import, export, status, test commands
+        /// Supports: import, export, status, test, syncstatus, and Azure commands
         /// </summary>
         /// <param name="serviceProvider">Dependency injection service provider</param>
-        /// <param name="command">Command to execute (import, export, status, test)</param>
-        /// <param name="folderPath">Optional folder path override</param>
+        /// <param name="parsedArgs">Parsed command line arguments</param>
         /// <returns>Exit code: 0 for success, 1 for error</returns>
-        private static async Task<int> ExecuteCommandAsync(ServiceProvider serviceProvider, string command, string? folderPath)
+        private static async Task<int> ExecuteCommandAsync(ServiceProvider serviceProvider, ParsedArguments parsedArgs)
         {
+            var command = parsedArgs.Command;
             try
             {
+                var folderPath = parsedArgs.FolderPath;
+                
                 switch (command)
                 {
                     case "import":
                         Log.Information("Starting import command");
                         var importCommand = serviceProvider.GetRequiredService<ImportCommand>();
-                        var importResult = await importCommand.ExecuteAsync(folderPath);
+                        var skipArchive = parsedArgs.Flags.Contains("skiparchive");
+                        var importResult = await importCommand.ExecuteAsync(folderPath, skipArchive);
                         Console.WriteLine(importResult.Summary);
                         if (!string.IsNullOrEmpty(importResult.ErrorMessage))
                         {
@@ -313,8 +371,10 @@ namespace PhotoSync
                     case "export":
                         Log.Information("Starting export command");
                         var exportCommand = serviceProvider.GetRequiredService<ExportCommand>();
-                        var exportResult = await exportCommand.ExecuteAsync(folderPath);
-                        Console.WriteLine($"Exported {exportResult.SuccessCount} images in {exportResult.Duration:mm\\:ss}");
+                        var incremental = parsedArgs.Flags.Contains("incremental");
+                        var force = parsedArgs.Flags.Contains("force");
+                        var exportResult = await exportCommand.ExecuteAsync(folderPath, incremental, force);
+                        Console.WriteLine(exportResult.Summary);
                         if (!string.IsNullOrEmpty(exportResult.ErrorMessage))
                         {
                             Console.WriteLine($"Error: {exportResult.ErrorMessage}");
@@ -325,6 +385,12 @@ namespace PhotoSync
                         Log.Information("Starting status command");
                         return await ExecuteStatusCommandAsync(serviceProvider);
 
+                    case "syncstatus":
+                        Log.Information("Starting syncstatus command");
+                        var syncStatusCommand = serviceProvider.GetRequiredService<SyncStatusCommand>();
+                        var detailed = parsedArgs.Flags.Contains("detailed");
+                        return await syncStatusCommand.ExecuteAsync(detailed);
+
                     case "test":
                         Log.Information("Starting test command");
                         return await ExecuteTestCommandAsync(serviceProvider);
@@ -332,6 +398,53 @@ namespace PhotoSync
                     case "diagnose":
                         Log.Information("Starting database diagnostic");
                         return await ExecuteDiagnoseCommandAsync(serviceProvider);
+
+                    case "toazurestorage":
+                    case "-toazurestorage":
+                        Log.Information("Starting toazurestorage command");
+                        var toAzureCommand = serviceProvider.GetRequiredService<ToAzureStorageCommand>();
+                        var toAzureForce = parsedArgs.Flags.Contains("force");
+                        var toAzureResult = await toAzureCommand.ExecuteAsync(toAzureForce);
+                        Console.WriteLine(toAzureResult.Summary);
+                        if (!string.IsNullOrEmpty(toAzureResult.ErrorMessage))
+                        {
+                            Console.WriteLine($"Error: {toAzureResult.ErrorMessage}");
+                        }
+                        return toAzureResult.IsSuccess ? 0 : 1;
+
+                    case "fromazurestorage":
+                    case "-fromazurestorage":
+                        Log.Information("Starting fromazurestorage command");
+                        var fromAzureCommand = serviceProvider.GetRequiredService<FromAzureStorageCommand>();
+                        var fromAzureResult = await fromAzureCommand.ExecuteAsync();
+                        Console.WriteLine(fromAzureResult.Summary);
+                        if (!string.IsNullOrEmpty(fromAzureResult.ErrorMessage))
+                        {
+                            Console.WriteLine($"Error: {fromAzureResult.ErrorMessage}");
+                        }
+                        return fromAzureResult.IsSuccess ? 0 : 1;
+
+                    case "writeall":
+                    case "-writeall":
+                        Log.Information("Starting writeall command");
+                        var writeAllCommand = serviceProvider.GetRequiredService<WriteAllCommand>();
+                        // Check if there's an additional argument for field to nullify
+                        string? fieldToNullify = null;
+                        if (!string.IsNullOrEmpty(folderPath))
+                        {
+                            // In this case, folderPath is actually the field name
+                            fieldToNullify = folderPath;
+                        }
+                        var workflow = parsedArgs.AdditionalArgs.ContainsKey("workflow") ? parsedArgs.AdditionalArgs["workflow"] : "import,azure,export";
+                        var skipArchiveFlag = parsedArgs.Flags.Contains("skiparchive");
+                        var dryRun = parsedArgs.Flags.Contains("dryrun");
+                        var writeAllResult = await writeAllCommand.ExecuteAsync(fieldToNullify, workflow, skipArchiveFlag, dryRun);
+                        Console.WriteLine(writeAllResult.Summary);
+                        if (!string.IsNullOrEmpty(writeAllResult.ErrorMessage))
+                        {
+                            Console.WriteLine($"Error: {writeAllResult.ErrorMessage}");
+                        }
+                        return writeAllResult.IsSuccess ? 0 : 1;
 
                     default:
                         Log.Error("Unknown command: {Command}", command);
@@ -512,31 +625,62 @@ namespace PhotoSync
             Console.WriteLine("  PhotoSync <command> [folder-path] [-settings override-file]");
             Console.WriteLine();
             Console.WriteLine("COMMANDS:");
-            Console.WriteLine("  import [path]   Import JPG files from folder to database");
-            Console.WriteLine("                  Uses configured ImportFolder if path not specified");
+            Console.WriteLine("  import [path]        Import JPG files from folder to database");
+            Console.WriteLine("                       Uses configured ImportFolder if path not specified");
+            Console.WriteLine("                       Options: -skiparchive");
             Console.WriteLine();
-            Console.WriteLine("  export [path]   Export images from database to folder as JPG files");
-            Console.WriteLine("                  Uses configured ExportFolder if path not specified");
+            Console.WriteLine("  export [path]        Export images from database to folder as JPG files");
+            Console.WriteLine("                       Uses configured ExportFolder if path not specified");
+            Console.WriteLine("                       Options: -incremental, -force");
             Console.WriteLine();
-            Console.WriteLine("  status          Check database connectivity and image count");
+            Console.WriteLine("  status               Check database connectivity and image count");
             Console.WriteLine();
-            Console.WriteLine("  test            Validate configuration and folder access");
+            Console.WriteLine("  syncstatus           Display comprehensive sync status and statistics");
+            Console.WriteLine("                       Options: -detailed");
             Console.WriteLine();
-            Console.WriteLine("  diagnose        Run detailed database connection diagnostic");
+            Console.WriteLine("  test                 Validate configuration and folder access");
+            Console.WriteLine();
+            Console.WriteLine("  diagnose             Run detailed database connection diagnostic");
+            Console.WriteLine();
+            Console.WriteLine("  toazurestorage       Upload images to Azure Storage where AzureStoragePath is NULL");
+            Console.WriteLine("                       Options: -force (sync images with AzureSyncRequired=1)");
+            Console.WriteLine();
+            Console.WriteLine("  fromazurestorage     Download images from Azure Storage where ImageData is NULL");
+            Console.WriteLine();
+            Console.WriteLine("  writeall [field]     Process all NULL values that can be fixed");
+            Console.WriteLine("                       Optional: specify field to nullify first (ImageData or AzureStoragePath)");
+            Console.WriteLine("                       Options: -workflow <steps>, -skiparchive, -dryrun");
             Console.WriteLine();
             Console.WriteLine("OPTIONS:");
-            Console.WriteLine("  -settings <file>  Override connection and photo settings from file");
-            Console.WriteLine("                    File should contain ConnectionStrings and/or PhotoSettings");
+            Console.WriteLine("  -settings <file>     Override connection and photo settings from file");
+            Console.WriteLine("                       File should contain ConnectionStrings and/or PhotoSettings");
+            Console.WriteLine();
+            Console.WriteLine("  -workflow <steps>    Specify workflow steps (default: import,azure,export)");
+            Console.WriteLine("                       Examples: \"import\", \"import,azure\", \"azure,export\"");
+            Console.WriteLine();
+            Console.WriteLine("  -incremental         Only process new/changed items");
+            Console.WriteLine("  -force               Force operation even if already processed");
+            Console.WriteLine("  -skiparchive         Skip archiving imported files");
+            Console.WriteLine("  -dryrun              Preview operations without making changes");
+            Console.WriteLine("  -detailed            Show detailed information");
             Console.WriteLine();
             Console.WriteLine("EXAMPLES:");
             Console.WriteLine("  PhotoSync import");
-            Console.WriteLine("  PhotoSync import \"C:\\MyPhotos\"");
-            Console.WriteLine("  PhotoSync export \"C:\\ExportedPhotos\"");
+            Console.WriteLine("  PhotoSync import \"C:\\MyPhotos\" -skiparchive");
+            Console.WriteLine("  PhotoSync export \"C:\\ExportedPhotos\" -incremental");
             Console.WriteLine("  PhotoSync status");
+            Console.WriteLine("  PhotoSync syncstatus");
+            Console.WriteLine("  PhotoSync syncstatus -detailed");
             Console.WriteLine("  PhotoSync test");
             Console.WriteLine("  PhotoSync diagnose");
             Console.WriteLine("  PhotoSync import -settings \"C:\\Config\\prod-settings.json\"");
-            Console.WriteLine("  PhotoSync status -settings \"C:\\Config\\test-db.json\"");
+            Console.WriteLine("  PhotoSync toazurestorage");
+            Console.WriteLine("  PhotoSync toazurestorage -force");
+            Console.WriteLine("  PhotoSync fromazurestorage");
+            Console.WriteLine("  PhotoSync writeall");
+            Console.WriteLine("  PhotoSync writeall ImageData");
+            Console.WriteLine("  PhotoSync writeall -workflow \"import,export\" -dryrun");
+            Console.WriteLine("  PhotoSync writeall AzureStoragePath -workflow \"azure\"");
             Console.WriteLine();
             Console.WriteLine("For more information, see README.md");
 

@@ -1,3 +1,4 @@
+using PhotoSync.Configuration;
 using PhotoSync.Services;
 using Serilog;
 
@@ -9,9 +10,11 @@ namespace PhotoSync.Services
     public class FileService : IFileService
     {
         private readonly ILogger _logger;
+        private readonly PhotoSettings _photoSettings;
 
-        public FileService(ILogger logger)
+        public FileService(PhotoSettings photoSettings, ILogger logger)
         {
+            _photoSettings = photoSettings ?? throw new ArgumentNullException(nameof(photoSettings));
             _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         }
 
@@ -258,6 +261,281 @@ namespace PhotoSync.Services
                 sanitized = "unnamed";
 
             return sanitized;
+        }
+
+        /// <summary>
+        /// Archives a file by moving it to an archive folder
+        /// </summary>
+        public async Task<string> ArchiveFileAsync(string sourceFilePath, string archiveFolder, bool preserveStructure = false)
+        {
+            if (!File.Exists(sourceFilePath))
+                throw new FileNotFoundException($"Source file not found: {sourceFilePath}");
+
+            try
+            {
+                var fileName = Path.GetFileName(sourceFilePath);
+                var targetPath = archiveFolder;
+
+                // Preserve folder structure if requested
+                if (preserveStructure)
+                {
+                    var sourceFolder = Path.GetDirectoryName(sourceFilePath);
+                    var relativePath = Path.GetRelativePath(_photoSettings.ImportFolder, sourceFolder);
+                    if (!relativePath.StartsWith(".."))
+                    {
+                        targetPath = Path.Combine(archiveFolder, relativePath);
+                    }
+                }
+
+                // Ensure target directory exists
+                EnsureDirectoryExists(targetPath);
+
+                // Handle duplicate file names
+                var targetFilePath = Path.Combine(targetPath, fileName);
+                if (File.Exists(targetFilePath))
+                {
+                    var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                    var nameWithoutExt = Path.GetFileNameWithoutExtension(fileName);
+                    var extension = Path.GetExtension(fileName);
+                    targetFilePath = Path.Combine(targetPath, $"{nameWithoutExt}_{timestamp}{extension}");
+                }
+
+                // Move the file
+                await Task.Run(() => File.Move(sourceFilePath, targetFilePath));
+                
+                _logger.Information("Archived file from {Source} to {Target}", sourceFilePath, targetFilePath);
+                return targetFilePath;
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error archiving file: {FilePath}", sourceFilePath);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Calculates SHA256 hash of a file
+        /// </summary>
+        public async Task<string> CalculateFileHashAsync(string filePath)
+        {
+            if (!File.Exists(filePath))
+                throw new FileNotFoundException($"File not found: {filePath}");
+
+            try
+            {
+                using var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+                using var sha256 = System.Security.Cryptography.SHA256.Create();
+                
+                var hash = await sha256.ComputeHashAsync(stream);
+                return Convert.ToBase64String(hash);
+            }
+            catch (Exception ex)
+            {
+                _logger.Error(ex, "Error calculating hash for file: {FilePath}", filePath);
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Calculates SHA256 hash of byte array
+        /// </summary>
+        public string CalculateHash(byte[] data)
+        {
+            if (data == null || data.Length == 0)
+                return string.Empty;
+
+            using var sha256 = System.Security.Cryptography.SHA256.Create();
+            var hash = sha256.ComputeHash(data);
+            return Convert.ToBase64String(hash);
+        }
+
+        /// <summary>
+        /// Archives multiple files in parallel
+        /// </summary>
+        public async Task<Dictionary<string, string>> ArchiveFilesAsync(IEnumerable<string> filePaths, string archiveFolder, int maxParallel = 4)
+        {
+            var results = new Dictionary<string, string>();
+            var semaphore = new SemaphoreSlim(maxParallel, maxParallel);
+            var tasks = new List<Task>();
+
+            foreach (var filePath in filePaths)
+            {
+                var task = Task.Run(async () =>
+                {
+                    await semaphore.WaitAsync();
+                    try
+                    {
+                        var archivedPath = await ArchiveFileAsync(filePath, archiveFolder, _photoSettings.PreserveSourceStructure);
+                        lock (results)
+                        {
+                            results[filePath] = archivedPath;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.Error(ex, "Failed to archive file: {FilePath}", filePath);
+                        lock (results)
+                        {
+                            results[filePath] = string.Empty; // Empty string indicates failure
+                        }
+                    }
+                    finally
+                    {
+                        semaphore.Release();
+                    }
+                });
+                tasks.Add(task);
+            }
+
+            await Task.WhenAll(tasks);
+            return results;
+        }
+
+        /// <summary>
+        /// Gets all JPG files from the specified folder
+        /// </summary>
+        public List<string> GetJpgFiles(string folderPath)
+        {
+            if (!Directory.Exists(folderPath))
+            {
+                _logger.Warning("Folder does not exist: {FolderPath}", folderPath);
+                return new List<string>();
+            }
+
+            return Directory.GetFiles(folderPath, "*.*", SearchOption.TopDirectoryOnly)
+                .Where(file => Path.GetExtension(file).ToLowerInvariant() == ".jpg" || 
+                              Path.GetExtension(file).ToLowerInvariant() == ".jpeg")
+                .ToList();
+        }
+
+        /// <summary>
+        /// Reads file contents asynchronously
+        /// </summary>
+        public async Task<byte[]> ReadFileAsync(string filePath)
+        {
+            return await File.ReadAllBytesAsync(filePath);
+        }
+
+        /// <summary>
+        /// Gets filename without extension
+        /// </summary>
+        public string GetFileNameWithoutExtension(string filePath)
+        {
+            return Path.GetFileNameWithoutExtension(filePath);
+        }
+
+        /// <summary>
+        /// Writes data to file asynchronously
+        /// </summary>
+        public async Task WriteFileAsync(string filePath, byte[] data)
+        {
+            // Ensure directory exists
+            var directory = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+            {
+                Directory.CreateDirectory(directory);
+            }
+            await File.WriteAllBytesAsync(filePath, data);
+        }
+
+        /// <summary>
+        /// Archives a file synchronously (for compatibility)
+        /// </summary>
+        public void ArchiveFile(string sourceFilePath, string archiveFolder)
+        {
+            var task = ArchiveFileAsync(sourceFilePath, archiveFolder);
+            task.Wait();
+        }
+
+        /// <summary>
+        /// Gets files matching pattern
+        /// </summary>
+        public List<string> GetFiles(string folderPath, string pattern)
+        {
+            if (!Directory.Exists(folderPath))
+            {
+                _logger.Warning("Folder does not exist: {FolderPath}", folderPath);
+                return new List<string>();
+            }
+
+            return Directory.GetFiles(folderPath, pattern, SearchOption.TopDirectoryOnly).ToList();
+        }
+
+        /// <summary>
+        /// Moves a file from source to destination
+        /// </summary>
+        public void MoveFile(string sourceFilePath, string destinationFilePath)
+        {
+            // Ensure destination directory exists
+            var destDir = Path.GetDirectoryName(destinationFilePath);
+            if (!string.IsNullOrEmpty(destDir) && !Directory.Exists(destDir))
+            {
+                Directory.CreateDirectory(destDir);
+            }
+            File.Move(sourceFilePath, destinationFilePath);
+        }
+
+        /// <summary>
+        /// Copies a file from source to destination
+        /// </summary>
+        public void CopyFile(string sourceFilePath, string destinationFilePath)
+        {
+            // Ensure destination directory exists
+            var destDir = Path.GetDirectoryName(destinationFilePath);
+            if (!string.IsNullOrEmpty(destDir) && !Directory.Exists(destDir))
+            {
+                Directory.CreateDirectory(destDir);
+            }
+            File.Copy(sourceFilePath, destinationFilePath);
+        }
+
+        /// <summary>
+        /// Deletes a file
+        /// </summary>
+        public void DeleteFile(string filePath)
+        {
+            if (File.Exists(filePath))
+            {
+                File.Delete(filePath);
+            }
+        }
+
+        /// <summary>
+        /// Checks if a directory exists
+        /// </summary>
+        public bool DirectoryExists(string directoryPath)
+        {
+            return Directory.Exists(directoryPath);
+        }
+
+        /// <summary>
+        /// Gets the size of a file in bytes
+        /// </summary>
+        public long GetFileSize(string filePath)
+        {
+            var fileInfo = new FileInfo(filePath);
+            return fileInfo.Exists ? fileInfo.Length : 0;
+        }
+
+        /// <summary>
+        /// Checks if a file exists
+        /// </summary>
+        public bool FileExists(string filePath)
+        {
+            return File.Exists(filePath);
+        }
+        
+        /// <summary>
+        /// Creates output directory if it doesn't exist
+        /// </summary>
+        public string CreateOutputDirectory(string directoryPath)
+        {
+            if (!Directory.Exists(directoryPath))
+            {
+                Directory.CreateDirectory(directoryPath);
+                _logger.Information("Created output directory: {DirectoryPath}", directoryPath);
+            }
+            return directoryPath;
         }
     }
 }

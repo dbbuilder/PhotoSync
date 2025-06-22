@@ -2,36 +2,67 @@
 -- PhotoSync Database Setup Script
 -- =============================================
 
--- Create database table for storing images
-IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Photos' AND xtype='U')
+-- Create PHOTOS schema if it doesn't exist
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 'PHOTOS')
 BEGIN
-    CREATE TABLE Photos (
+    EXEC('CREATE SCHEMA PHOTOS')
+    PRINT 'PHOTOS schema created successfully'
+END
+ELSE
+BEGIN
+    PRINT 'PHOTOS schema already exists'
+END
+
+-- Create database table for storing images
+IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'PHOTOS' AND TABLE_NAME = 'Photos')
+BEGIN
+    CREATE TABLE PHOTOS.Photos (
         Id int IDENTITY(1,1) PRIMARY KEY,
         Code nvarchar(100) NOT NULL,
-        ImageData varbinary(max) NOT NULL,
+        ImageData varbinary(max) NULL,
+        AzureStoragePath nvarchar(500) NULL,
         CreatedDate datetime2 NOT NULL DEFAULT GETUTCDATE(),
         ModifiedDate datetime2 NULL
     )
 
     -- Create unique constraint on Code field
-    ALTER TABLE Photos ADD CONSTRAINT UK_Photos_Code UNIQUE (Code)
+    ALTER TABLE PHOTOS.Photos ADD CONSTRAINT UK_Photos_Code UNIQUE (Code)
 
     -- Index for faster lookups by code
-    CREATE NONCLUSTERED INDEX IX_Photos_Code ON Photos (Code)
+    CREATE NONCLUSTERED INDEX IX_Photos_Code ON PHOTOS.Photos (Code)
+    
+    -- Index for Azure operations
+    CREATE NONCLUSTERED INDEX IX_Photos_AzureStoragePath ON PHOTOS.Photos (AzureStoragePath)
 
     PRINT 'Photos table created successfully'
 END
 ELSE
 BEGIN
-    PRINT 'Photos table already exists'
+    -- Add AzureStoragePath column if it doesn't exist
+    IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('PHOTOS.Photos') AND name = 'AzureStoragePath')
+    BEGIN
+        ALTER TABLE PHOTOS.Photos ADD AzureStoragePath nvarchar(500) NULL
+        CREATE NONCLUSTERED INDEX IX_Photos_AzureStoragePath ON PHOTOS.Photos (AzureStoragePath)
+        PRINT 'Added AzureStoragePath column to Photos table'
+    END
+    
+    -- Make ImageData nullable if it isn't already
+    IF EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('PHOTOS.Photos') AND name = 'ImageData' AND is_nullable = 0)
+    BEGIN
+        ALTER TABLE PHOTOS.Photos ALTER COLUMN ImageData varbinary(max) NULL
+        PRINT 'Made ImageData column nullable'
+    END
+    
+    PRINT 'Photos table already exists and has been updated'
 END
 
 -- =============================================
 -- Stored procedure to save (insert or update) an image
 -- =============================================
-CREATE OR ALTER PROCEDURE sp_SaveImage
+CREATE OR ALTER PROCEDURE PHOTOS.sp_SaveImage
     @Code nvarchar(100),
-    @ImageData varbinary(max),
+    @ImageData varbinary(max) = NULL,
+    @AzureStoragePath nvarchar(500) = NULL,
     @CreatedDate datetime2,
     @Result int OUTPUT
 AS
@@ -48,11 +79,12 @@ BEGIN
         BEGIN TRANSACTION
         
         -- Check if record already exists
-        IF EXISTS (SELECT 1 FROM Photos WHERE Code = @Code)
+        IF EXISTS (SELECT 1 FROM PHOTOS.Photos WHERE Code = @Code)
         BEGIN
             -- Update existing record
-            UPDATE Photos 
-            SET ImageData = @ImageData,
+            UPDATE PHOTOS.Photos 
+            SET ImageData = ISNULL(@ImageData, ImageData),
+                AzureStoragePath = ISNULL(@AzureStoragePath, AzureStoragePath),
                 ModifiedDate = GETUTCDATE()
             WHERE Code = @Code
             
@@ -62,8 +94,8 @@ BEGIN
         ELSE
         BEGIN
             -- Insert new record
-            INSERT INTO Photos (Code, ImageData, CreatedDate)
-            VALUES (@Code, @ImageData, @CreatedDate)
+            INSERT INTO PHOTOS.Photos (Code, ImageData, AzureStoragePath, CreatedDate)
+            VALUES (@Code, @ImageData, @AzureStoragePath, @CreatedDate)
             
             SET @Result = @@ROWCOUNT
             PRINT 'Inserted new image record for Code: ' + @Code
@@ -91,7 +123,7 @@ END
 -- =============================================
 -- Stored procedure to get all images
 -- =============================================
-CREATE OR ALTER PROCEDURE sp_GetAllImages
+CREATE OR ALTER PROCEDURE PHOTOS.sp_GetAllImages
 AS
 BEGIN
     SET NOCOUNT ON
@@ -102,9 +134,10 @@ BEGIN
     SELECT 
         Code,
         ImageData,
+        AzureStoragePath,
         CreatedDate,
         ModifiedDate
-    FROM Photos
+    FROM PHOTOS.Photos
     ORDER BY CreatedDate DESC
     
     -- Print result summary as requested
@@ -114,7 +147,7 @@ END
 -- =============================================
 -- Stored procedure to get image by code
 -- =============================================
-CREATE OR ALTER PROCEDURE sp_GetImageByCode
+CREATE OR ALTER PROCEDURE PHOTOS.sp_GetImageByCode
     @Code nvarchar(100)
 AS
 BEGIN
@@ -126,9 +159,10 @@ BEGIN
     SELECT 
         Code,
         ImageData,
+        AzureStoragePath,
         CreatedDate,
         ModifiedDate
-    FROM Photos
+    FROM PHOTOS.Photos
     WHERE Code = @Code
     
     -- Print result summary as requested
@@ -141,7 +175,7 @@ END
 -- =============================================
 -- Stored procedure to get image count
 -- =============================================
-CREATE OR ALTER PROCEDURE sp_GetImageCount
+CREATE OR ALTER PROCEDURE PHOTOS.sp_GetImageCount
 AS
 BEGIN
     SET NOCOUNT ON
@@ -150,7 +184,7 @@ BEGIN
     PRINT 'Executing sp_GetImageCount'
     
     DECLARE @Count int
-    SELECT @Count = COUNT(*) FROM Photos
+    SELECT @Count = COUNT(*) FROM PHOTOS.Photos
     
     -- Print result summary as requested
     PRINT 'Total image count: ' + CAST(@Count AS nvarchar(10))
@@ -161,7 +195,7 @@ END
 -- =============================================
 -- Stored procedure to delete an image by code
 -- =============================================
-CREATE OR ALTER PROCEDURE sp_DeleteImage
+CREATE OR ALTER PROCEDURE PHOTOS.sp_DeleteImage
     @Code nvarchar(100),
     @Result int OUTPUT
 AS
@@ -178,7 +212,7 @@ BEGIN
         BEGIN TRANSACTION
         
         -- Delete the record
-        DELETE FROM Photos WHERE Code = @Code
+        DELETE FROM PHOTOS.Photos WHERE Code = @Code
         
         SET @Result = @@ROWCOUNT
         
@@ -208,13 +242,184 @@ BEGIN
 END
 
 -- =============================================
+-- Stored procedure to get images with NULL Azure Storage Path
+-- =============================================
+CREATE OR ALTER PROCEDURE PHOTOS.sp_GetImagesWithNullAzurePath
+AS
+BEGIN
+    SET NOCOUNT ON
+    
+    PRINT 'Executing sp_GetImagesWithNullAzurePath'
+    
+    SELECT 
+        Code,
+        ImageData,
+        AzureStoragePath,
+        CreatedDate,
+        ModifiedDate
+    FROM PHOTOS.Photos
+    WHERE AzureStoragePath IS NULL AND ImageData IS NOT NULL
+    ORDER BY CreatedDate DESC
+    
+    PRINT 'Retrieved ' + CAST(@@ROWCOUNT AS nvarchar(10)) + ' images with NULL Azure path'
+END
+
+-- =============================================
+-- Stored procedure to get images with NULL photo data
+-- =============================================
+CREATE OR ALTER PROCEDURE PHOTOS.sp_GetImagesWithNullPhotoData
+AS
+BEGIN
+    SET NOCOUNT ON
+    
+    PRINT 'Executing sp_GetImagesWithNullPhotoData'
+    
+    SELECT 
+        Code,
+        ImageData,
+        AzureStoragePath,
+        CreatedDate,
+        ModifiedDate
+    FROM PHOTOS.Photos
+    WHERE ImageData IS NULL AND AzureStoragePath IS NOT NULL
+    ORDER BY CreatedDate DESC
+    
+    PRINT 'Retrieved ' + CAST(@@ROWCOUNT AS nvarchar(10)) + ' images with NULL photo data'
+END
+
+-- =============================================
+-- Stored procedure to update Azure Storage Path
+-- =============================================
+CREATE OR ALTER PROCEDURE PHOTOS.sp_UpdateAzureStoragePath
+    @Code nvarchar(100),
+    @AzureStoragePath nvarchar(500),
+    @Result int OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON
+    
+    PRINT 'Executing sp_UpdateAzureStoragePath for Code: ' + @Code
+    
+    SET @Result = 0
+    
+    BEGIN TRY
+        UPDATE PHOTOS.Photos 
+        SET AzureStoragePath = @AzureStoragePath,
+            ModifiedDate = GETUTCDATE()
+        WHERE Code = @Code
+        
+        SET @Result = @@ROWCOUNT
+        
+        IF @Result > 0
+            PRINT 'Successfully updated Azure path for Code: ' + @Code
+        ELSE
+            PRINT 'No record found for Code: ' + @Code
+            
+    END TRY
+    BEGIN CATCH
+        PRINT 'Error in sp_UpdateAzureStoragePath: ' + ERROR_MESSAGE()
+        SET @Result = 0
+        THROW
+    END CATCH
+END
+
+-- =============================================
+-- Stored procedure to update image data only
+-- =============================================
+CREATE OR ALTER PROCEDURE PHOTOS.sp_UpdateImageData
+    @Code nvarchar(100),
+    @ImageData varbinary(max),
+    @Result int OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON
+    
+    PRINT 'Executing sp_UpdateImageData for Code: ' + @Code
+    
+    SET @Result = 0
+    
+    BEGIN TRY
+        UPDATE PHOTOS.Photos 
+        SET ImageData = @ImageData,
+            ModifiedDate = GETUTCDATE()
+        WHERE Code = @Code
+        
+        SET @Result = @@ROWCOUNT
+        
+        IF @Result > 0
+            PRINT 'Successfully updated image data for Code: ' + @Code
+        ELSE
+            PRINT 'No record found for Code: ' + @Code
+            
+    END TRY
+    BEGIN CATCH
+        PRINT 'Error in sp_UpdateImageData: ' + ERROR_MESSAGE()
+        SET @Result = 0
+        THROW
+    END CATCH
+END
+
+-- =============================================
+-- Stored procedure to nullify a specific field
+-- =============================================
+CREATE OR ALTER PROCEDURE PHOTOS.sp_NullifyField
+    @FieldName nvarchar(50),
+    @Result int OUTPUT
+AS
+BEGIN
+    SET NOCOUNT ON
+    
+    PRINT 'Executing sp_NullifyField for field: ' + @FieldName
+    
+    SET @Result = 0
+    
+    BEGIN TRY
+        IF @FieldName = 'ImageData'
+        BEGIN
+            UPDATE PHOTOS.Photos 
+            SET ImageData = NULL,
+                ModifiedDate = GETUTCDATE()
+            WHERE ImageData IS NOT NULL
+            
+            SET @Result = @@ROWCOUNT
+            PRINT 'Nullified ImageData field for ' + CAST(@Result AS nvarchar(10)) + ' records'
+        END
+        ELSE IF @FieldName = 'AzureStoragePath'
+        BEGIN
+            UPDATE PHOTOS.Photos 
+            SET AzureStoragePath = NULL,
+                ModifiedDate = GETUTCDATE()
+            WHERE AzureStoragePath IS NOT NULL
+            
+            SET @Result = @@ROWCOUNT
+            PRINT 'Nullified AzureStoragePath field for ' + CAST(@Result AS nvarchar(10)) + ' records'
+        END
+        ELSE
+        BEGIN
+            PRINT 'Invalid field name: ' + @FieldName
+            SET @Result = -1
+        END
+    END TRY
+    BEGIN CATCH
+        PRINT 'Error in sp_NullifyField: ' + ERROR_MESSAGE()
+        SET @Result = 0
+        THROW
+    END CATCH
+END
+
+-- =============================================
 -- Grant permissions (adjust as needed for your environment)
 -- =============================================
--- GRANT EXECUTE ON sp_SaveImage TO [YourApplicationUser]
--- GRANT EXECUTE ON sp_GetAllImages TO [YourApplicationUser]
--- GRANT EXECUTE ON sp_GetImageByCode TO [YourApplicationUser]
--- GRANT EXECUTE ON sp_GetImageCount TO [YourApplicationUser]
--- GRANT EXECUTE ON sp_DeleteImage TO [YourApplicationUser]
+-- GRANT EXECUTE ON PHOTOS.sp_SaveImage TO [YourApplicationUser]
+-- GRANT EXECUTE ON PHOTOS.sp_GetAllImages TO [YourApplicationUser]
+-- GRANT EXECUTE ON PHOTOS.sp_GetImageByCode TO [YourApplicationUser]
+-- GRANT EXECUTE ON PHOTOS.sp_GetImageCount TO [YourApplicationUser]
+-- GRANT EXECUTE ON PHOTOS.sp_DeleteImage TO [YourApplicationUser]
+-- GRANT EXECUTE ON PHOTOS.sp_GetImagesWithNullAzurePath TO [YourApplicationUser]
+-- GRANT EXECUTE ON PHOTOS.sp_GetImagesWithNullPhotoData TO [YourApplicationUser]
+-- GRANT EXECUTE ON PHOTOS.sp_UpdateAzureStoragePath TO [YourApplicationUser]
+-- GRANT EXECUTE ON PHOTOS.sp_UpdateImageData TO [YourApplicationUser]
+-- GRANT EXECUTE ON PHOTOS.sp_NullifyField TO [YourApplicationUser]
 
 PRINT 'All stored procedures created successfully!'
 PRINT 'Database setup complete.'

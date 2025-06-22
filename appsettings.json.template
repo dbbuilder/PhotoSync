@@ -3,11 +3,21 @@
     "DefaultConnection": "Server=YOUR_SERVER;Database=YOUR_DATABASE;User Id=YOUR_USERNAME;Password=YOUR_PASSWORD;Encrypt=true;TrustServerCertificate=true;"
   }, 
   "PhotoSettings": {
-    "TableName": "Photos",
+    "TableName": "PHOTOS.Photos",
     "ImageFieldName": "ImageData",
     "CodeFieldName": "Code",
     "ImportFolder": "C:\\Temp\\PhotoSync\\Import",
-    "ExportFolder": "C:\\Temp\\PhotoSync\\Export"
+    "ExportFolder": "C:\\Temp\\PhotoSync\\Export",
+    "PhotoFieldName": "ImageData",
+    "AzureStoragePathFieldName": "AzureStoragePath",
+    "ImportedArchiveFolder": "C:\\Temp\\PhotoSync\\Import\\Imported",
+    "EnableAutoArchive": true,
+    "EnableDuplicateCheck": true,
+    "UseIncrementalExport": true,
+    "ExportFileNameFormat": "{Code}.jpg",
+    "TrackFileHash": true,
+    "PreserveSourceStructure": false,
+    "MaxParallelOperations": 4
   }, 
   "Serilog": {
     "MinimumLevel": {
@@ -39,5 +49,11 @@
     "ApplicationInsights": {
       "InstrumentationKey": "YOUR_INSTRUMENTATION_KEY"
     }
+  },
+  "AzureStorage": {
+    "ConnectionString": "DefaultEndpointsProtocol=https;AccountName=YOUR_STORAGE_ACCOUNT;AccountKey=YOUR_STORAGE_KEY;EndpointSuffix=core.windows.net",
+    "ContainerName": "photos",
+    "UseDefaultAzureCredential": false,
+    "StorageAccountName": "YOUR_STORAGE_ACCOUNT"
   }
 }

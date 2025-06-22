@@ -8,6 +8,7 @@ namespace PhotoSync.Configuration
         public ConnectionStrings ConnectionStrings { get; set; } = new();
         public PhotoSettings PhotoSettings { get; set; } = new();
         public AzureSettings Azure { get; set; } = new();
+        public AzureStorageSettings AzureStorage { get; set; } = new();
     }
 
     /// <summary>
@@ -23,11 +24,23 @@ namespace PhotoSync.Configuration
     /// </summary>
     public class PhotoSettings
     {
-        public string TableName { get; set; } = string.Empty;
-        public string ImageFieldName { get; set; } = string.Empty;
-        public string CodeFieldName { get; set; } = string.Empty;
+        public string TableName { get; set; } = "Photos";
+        public string ImageFieldName { get; set; } = "ImageData";
+        public string CodeFieldName { get; set; } = "Code";
         public string ImportFolder { get; set; } = string.Empty;
         public string ExportFolder { get; set; } = string.Empty;
+        public string PhotoFieldName { get; set; } = "ImageData";
+        public string AzureStoragePathFieldName { get; set; } = "AzureStoragePath";
+        
+        // Workflow settings
+        public string ImportedArchiveFolder { get; set; } = string.Empty;
+        public bool EnableAutoArchive { get; set; } = true;
+        public bool EnableDuplicateCheck { get; set; } = true;
+        public bool UseIncrementalExport { get; set; } = true;
+        public string ExportFileNameFormat { get; set; } = "{Code}.jpg";
+        public bool TrackFileHash { get; set; } = true;
+        public bool PreserveSourceStructure { get; set; } = false;
+        public int MaxParallelOperations { get; set; } = 4;
     }
 
     /// <summary>
@@ -53,5 +66,16 @@ namespace PhotoSync.Configuration
     public class ApplicationInsightsSettings
     {
         public string InstrumentationKey { get; set; } = string.Empty;
+    }
+
+    /// <summary>
+    /// Azure Storage configuration settings
+    /// </summary>
+    public class AzureStorageSettings
+    {
+        public string ConnectionString { get; set; } = string.Empty;
+        public string ContainerName { get; set; } = "photos";
+        public bool UseDefaultAzureCredential { get; set; } = false;
+        public string StorageAccountName { get; set; } = string.Empty;
     }
 }
